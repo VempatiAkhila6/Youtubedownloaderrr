@@ -1,2 +1,8 @@
 #!/bin/bash
-gunicorn app:app --bind 0.0.0.0:$PORT
+
+# Install FFmpeg
+apt-get update
+apt-get install -y ffmpeg
+
+# Now run the app (you can replace this line with your own start command)
+python3 app.py
