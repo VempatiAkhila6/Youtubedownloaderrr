@@ -1,70 +1,49 @@
 from flask import Flask, request, render_template, send_file, jsonify
 import yt_dlp
-import os
-import ssl
-import threading
-import time
-import atexit
-import shutil
+from yt_dlp.utils import DownloadError
+import os, ssl, threading, time, atexit, shutil, subprocess
 from datetime import datetime, timedelta
-import subprocess
 
 app = Flask(__name__)
-
 ssl._create_default_https_context = ssl._create_unverified_context
 
-# Global variables for progress tracking
 download_progress = {"percentage": 0, "status": "", "error": "", "filename": ""}
-
-# Directory for temporary files
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Clean up old files (older than 1 hour)
 def cleanup_downloads():
     while True:
         try:
             now = datetime.now()
-            for filename in os.listdir(DOWNLOAD_DIR):
-                file_path = os.path.join(DOWNLOAD_DIR, filename)
-                file_mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
-                if now - file_mtime > timedelta(hours=1):
-                    os.remove(file_path)
-        except Exception:
+            for f in os.listdir(DOWNLOAD_DIR):
+                path = os.path.join(DOWNLOAD_DIR, f)
+                if now - datetime.fromtimestamp(os.path.getmtime(path)) > timedelta(hours=1):
+                    os.remove(path)
+        except:
             pass
         time.sleep(3600)
-
 threading.Thread(target=cleanup_downloads, daemon=True).start()
-
-def remove_downloads():
-    shutil.rmtree(DOWNLOAD_DIR, ignore_errors=True)
-
-atexit.register(remove_downloads)
+atexit.register(lambda: shutil.rmtree(DOWNLOAD_DIR, ignore_errors=True))
 
 def download_progress_hook(d):
     global download_progress
     if d['status'] == 'downloading':
-        progress = d.get('_percent_str', '0%').replace('%', '')
         try:
-            download_progress['percentage'] = float(progress)
-        except ValueError:
+            download_progress['percentage'] = float(d.get('_percent_str', '0%').strip('%'))
+        except:
             pass
         download_progress['status'] = 'Downloading'
     elif d['status'] == 'finished':
-        download_progress['percentage'] = 100
-        download_progress['status'] = 'Downloaded'
-        download_progress['filename'] = d.get('info_dict', {}).get('title', 'output') + f".{d.get('ext', 'mp4')}"
+        download_progress.update({
+            'percentage': 100,
+            'status': 'Downloaded',
+            'filename': d.get('info_dict', {}).get('title', 'output') + f".{d.get('ext', 'mp4')}"
+        })
     elif d['status'] == 'error':
         download_progress['error'] = 'Download failed'
 
 def check_ffmpeg():
-    try:
-        result = subprocess.run(['./ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, text=True)
-        print(f"FFmpeg version: {result.stdout.splitlines()[0]}")
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        print(f"FFmpeg check failed: {str(e)}")
-        return False
+    return os.path.isfile('./ffmpeg') and os.access('./ffmpeg', os.X_OK)
 
 @app.route('/')
 def index():
@@ -76,91 +55,96 @@ def download():
     download_progress = {"percentage": 0, "status": "", "error": "", "filename": ""}
 
     url = request.form.get('url')
-    format_type = request.form.get('format', 'mp4')
+    fmt = request.form.get('format', 'mp4')
     resolution = request.form.get('resolution', '720').replace('p', '')
-
-    print(f"Starting download: URL={url}, Format={format_type}, Resolution={resolution}")
 
     if not url:
         download_progress['error'] = 'No URL provided'
-        print("Error: No URL provided")
         return jsonify(download_progress)
-
     if not os.path.exists('cookies.txt'):
         download_progress['error'] = 'cookies.txt file not found'
-        print("Error: cookies.txt missing")
+        return jsonify(download_progress)
+    if fmt == 'mp4' and not check_ffmpeg():
+        download_progress['error'] = 'FFmpeg not available'
         return jsonify(download_progress)
 
-    if format_type == 'mp4' and not check_ffmpeg():
-        download_progress['error'] = 'FFmpeg is not installed.'
-        return jsonify(download_progress)
-
-    output_file = os.path.join(DOWNLOAD_DIR, f"output_{int(time.time())}.{format_type}")
-
+    output_file = os.path.join(DOWNLOAD_DIR, f"output_{int(time.time())}.{fmt}")
     for f in os.listdir(DOWNLOAD_DIR):
-        if f.endswith(f".{format_type}"):
+        if f.endswith(f".{fmt}"):
             os.remove(os.path.join(DOWNLOAD_DIR, f))
-            print(f"Removed existing file: {f}")
 
     ffmpeg_path = os.path.abspath('./ffmpeg')
 
-    if format_type == 'mp4':
-        options = {
-            'outtmpl': output_file,
-            'noplaylist': True,
-            'progress_hooks': [download_progress_hook],
+    base_opts = {
+        'outtmpl': output_file,
+        'noplaylist': True,
+        'progress_hooks': [download_progress_hook],
+        'cookiefile': 'cookies.txt',
+        'verbose': True,
+        'ffmpeg_location': ffmpeg_path
+    }
+
+    if fmt == 'mp4':
+        opts_video = {**base_opts, **{
             'format': f'bestvideo[height<={resolution}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'merge_output_format': 'mp4',
-            'ffmpeg_location': ffmpeg_path,
-            'verbose': True,
-            'cookiefile': 'cookies.txt',
-        }
-    else:  # mp3
-        options = {
-            'outtmpl': output_file,
-            'noplaylist': True,
-            'progress_hooks': [download_progress_hook],
+            'merge_output_format': 'mp4'
+        }}
+    else:
+        opts_video = {**base_opts, **{
             'format': 'bestaudio[ext=m4a]/bestaudio',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
-            }],
-            'ffmpeg_location': ffmpeg_path,
-            'verbose': True,
-            'cookiefile': 'cookies.txt',
-        }
+            }]
+        }}
 
     def download_thread():
         try:
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with yt_dlp.YoutubeDL(opts_video) as ydl:
                 ydl.download([url])
-            print("Download completed successfully")
-        except Exception as e:
-            download_progress['error'] = f"Download failed: {str(e)}"
-            print(f"Download error: {str(e)}")
+        except DownloadError as e:
+            print(f"Primary download failed: {e}")
+            if fmt == 'mp4':
+                # fallback to MP3
+                fallback_file = output_file.replace('.mp4', '.mp3')
+                opts_audio = {**base_opts, **{
+                    'outtmpl': fallback_file,
+                    'format': 'bestaudio[ext=m4a]/bestaudio',
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }]
+                }}
+                try:
+                    with yt_dlp.YoutubeDL(opts_audio) as ydl2:
+                        ydl2.download([url])
+                    download_progress['status'] = 'Downloaded'
+                    download_progress['filename'] = os.path.basename(fallback_file)
+                    print("Fallback audio-only succeeded")
+                except DownloadError as e2:
+                    download_progress['error'] = f"Audio fallback failed: {e2}"
+                    print(f"Fallback download error: {e2}")
+            else:
+                download_progress['error'] = f"Download failed: {e}"
 
     threading.Thread(target=download_thread, daemon=True).start()
     return jsonify({"status": "started"})
 
 @app.route('/progress')
 def progress():
-    global download_progress
     return jsonify(download_progress)
 
 @app.route('/download_file')
 def download_file():
-    global download_progress
     if download_progress.get('status') == 'Downloaded':
-        format_type = request.args.get('format', 'mp4')
+        fmt = request.args.get('format', 'mp4')
         for f in os.listdir(DOWNLOAD_DIR):
-            if f.endswith(f".{format_type}"):
-                file_path = os.path.join(DOWNLOAD_DIR, f)
-                filename = download_progress.get('filename', f"output.{format_type}")
-                return send_file(file_path, as_attachment=True, download_name=filename)
-        download_progress['error'] = "File not found"
+            if f.endswith(f".{fmt}"):
+                path = os.path.join(DOWNLOAD_DIR, f)
+                return send_file(path, as_attachment=True, download_name=download_progress.get('filename'))
         return jsonify({"error": "File not found"}), 404
-    download_progress['error'] = "Download not complete"
     return jsonify({"error": "Download not complete"}), 400
 
 if __name__ == '__main__':
