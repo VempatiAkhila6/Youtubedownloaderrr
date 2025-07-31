@@ -101,6 +101,7 @@ def download():
             os.remove(os.path.join(DOWNLOAD_DIR, f))
             print(f"Removed existing file: {f}")  # Debug log
 
+    # Define options based on format
     if format_type == 'mp4':
         options = {
             'outtmpl': output_file,
@@ -108,8 +109,9 @@ def download():
             'progress_hooks': [download_progress_hook],
             'format': f'bestvideo[height<={resolution}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'merge_output_format': 'mp4',
-            'ffmpeg_location': 'ffmpeg',  # Use ffmpeg from PATH on Linux/Render
+            'ffmpeg_location': 'ffmpeg',  # Use ffmpeg from PATH
             'verbose': True,
+            'cookiefile': 'cookies.txt',  # Add path to your cookies.txt here
         }
     else:  # mp3 extraction
         options = {
@@ -124,6 +126,7 @@ def download():
             }],
             'ffmpeg_location': 'ffmpeg',  # Use ffmpeg from PATH
             'verbose': True,
+            'cookiefile': 'cookies.txt',  # Add path to your cookies.txt here
         }
 
     def download_thread():
