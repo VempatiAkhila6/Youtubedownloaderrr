@@ -1,2 +1,3 @@
-yt-dlp==2023.07.06  # or the latest version
-Flask==2.2.3       # if using Flask for the app
+Flask
+yt-dlp==2024.05.27
+gunicorn
