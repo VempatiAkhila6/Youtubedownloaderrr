@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YouTube Downloader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+    <div class="bg-white p-8 rounded-lg shadow-lg w-full max-w-md">
+        <h1 class="text-2xl font-bold mb-6 text-center">YouTube Downloader</h1>
+        <form id="downloadForm" class="space-y-4">
+            <div>
+                <label for="url" class="block text-sm font-medium text-gray-700">YouTube URL</label>
+                <input
+                    type="text"
+                    id="url"
+                    name="url"
+                    class="mt-1 block w-full p-2 border border-gray-300 rounded-md"
+                    placeholder="Paste YouTube URL here"
+                    required
+                />
+            </div>
+            <div>
+                <label for="format" class="block text-sm font-medium text-gray-700">Format</label>
+                <select
+                    id="format"
+                    name="format"
+                    class="mt-1 block w-full p-2 border border-gray-300 rounded-md"
+                >
+                    <option value="mp4">Video (MP4)</option>
+                    <option value="mp3">Audio (MP3)</option>
+                </select>
+            </div>
+            <div id="resolutionDiv" class="space-y-2">
+                <label for="resolution" class="block text-sm font-medium text-gray-700">Resolution</label>
+                <select
+                    id="resolution"
+                    name="resolution"
+                    class="mt-1 block w-full p-2 border border-gray-300 rounded-md"
+                >
+                    <option value="360p">360p</option>
+                    <option value="720p">720p</option>
+                    <option value="1080p">1080p</option>
+                </select>
+            </div>
+            <button
+                type="submit"
+                id="downloadBtn"
+                class="w-full bg-blue-600 text-white p-2 rounded-md hover:bg-blue-700 disabled:bg-gray-400"
+                disabled
+            >
+                Download
+            </button>
+        </form>
+        <div id="progressDiv" class="mt-4 hidden">
+            <div class="w-full bg-gray-200 rounded-full h-2.5">
+                <div
+                    id="progressBar"
+                    class="bg-blue-600 h-2.5 rounded-full"
+                    style="width: 0%"
+                ></div>
+            </div>
+            <p id="progressText" class="text-center mt-2 text-sm text-gray-600"></p>
+        </div>
+        <p id="errorText" class="mt-4 text-red-600 text-center hidden"></p>
+    </div>
+
+    <script>
+        const form = document.getElementById('downloadForm');
+        const urlInput = document.getElementById('url');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const progressDiv = document.getElementById('progressDiv');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+        const errorText = document.getElementById('errorText');
+        const formatSelect = document.getElementById('format');
+        const resolutionDiv = document.getElementById('resolutionDiv');
+
+        // Toggle resolution dropdown visibility
+        function toggleResolutionDiv() {
+            resolutionDiv.classList.toggle('hidden', formatSelect.value !== 'mp4');
+        }
+
+        // Initialize resolution dropdown visibility
+        toggleResolutionDiv();
+
+        // Enable/disable download button based on URL input
+        urlInput.addEventListener('input', () => {
+            downloadBtn.disabled = !urlInput.value.trim();
+        });
+
+        // Show/hide resolution dropdown based on format
+        formatSelect.addEventListener('change', toggleResolutionDiv);
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            downloadBtn.disabled = true;
+            errorText.classList.add('hidden');
+            progressDiv.classList.remove('hidden');
+            progressBar.style.width = '0%';
+            progressText.textContent = 'Starting download...';
+
+            const formData = new FormData(form);
+            const response = await fetch('/download', {
+                method: 'POST',
+                body: formData,
+            });
+
+            const result = await response.json();
+
+            if (result.status !== 'started') {
+                errorText.textContent = 'Failed to start download.';
+                errorText.classList.remove('hidden');
+                downloadBtn.disabled = false;
+                progressDiv.classList.add('hidden');
+                return;
+            }
+
+            const checkProgress = setInterval(async () => {
+                const progressResp = await fetch('/progress');
+                const progress = await progressResp.json();
+
+                if (progress.error) {
+                    errorText.textContent = progress.error;
+                    errorText.classList.remove('hidden');
+                    progressDiv.classList.add('hidden');
+                    downloadBtn.disabled = false;
+                    clearInterval(checkProgress);
+                    return;
+                }
+
+                if (progress.status === 'Downloading') {
+                    progressBar.style.width = progress.percentage + '%';
+                    progressText.textContent = `Downloading... ${progress.percentage.toFixed(1)}%`;
+                } else if (progress.status === 'Downloaded') {
+                    progressBar.style.width = '100%';
+                    progressText.textContent = 'Download complete! Preparing file...';
+
+                    // Trigger file download
+                    const format = formData.get('format');
+                    window.location.href = `/download_file?format=${format}`;
+                    downloadBtn.disabled = false;
+                    clearInterval(checkProgress);
+                }
+            }, 1000);
+        });
+    </script>
+</body>
+</html>
